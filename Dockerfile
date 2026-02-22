@@ -1,19 +1,21 @@
-FROM rocker/tidyverse:latest
+FROM python:3.11-slim
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        libsecret-1-dev \
+RUN apt-get update && apt-get install -y \
+    libfreetype6-dev \
+    libpng-dev \
+    libopenjp2-7-dev \
+    libtiff5-dev \
+    libxcb1 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN install2.r config emayili gt patchwork pins remotes \
-    && rm -rf /tmp/downloaded_packages
-RUN R -q -e 'remotes::install_github("rladies/meetupr")'
+WORKDIR /app
 
-RUN mkdir -p /opt/meetupr
-WORKDIR /opt/meetupr
-COPY ./get_events.R .
-COPY ./send_email.R .
-COPY ./update_discourse.R .
-COPY ./meetup_report.Rmd .
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-CMD ["R"]
+COPY meetup_bot.py .
+
+RUN mkdir -p /srv/docker-config/meetup /srv/docker-pins/meetup
+
+ENTRYPOINT ["python", "meetup_bot.py"]
+CMD ["--help"]

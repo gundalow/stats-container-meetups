@@ -1,0 +1,6 @@
+requests
+pandas
+matplotlib
+PyYAML
+jinja2
+python-dateutil
