@@ -1,17 +1,30 @@
-# Project Plan: Meetup Bot Python Rewrite
+# Project Plan: Meetup Bot Python Rewrite (v3)
 
-This project involves rewriting the existing R-based Meetup reporting and Discourse automation system into a single Python script using the new Meetup GraphQL API.
+This project involves rewriting the existing R-based Meetup reporting and Discourse automation system into a single Python script (`meetup_bot.py`) using the new Meetup Pro GraphQL API.
 
 ## 1. Data Structures
 
-### Group Data (Cached in `groups.json`)
+### Group & Network Data (Cached in `groups.json`)
 ```json
 {
-  "urlname": "Ansible-Minneapolis",
-  "id": "123456",
-  "name": "Minneapolis Ansible User Group",
-  "country": "US",
-  "city": "Minneapolis"
+  "network": {
+    "urlname": "ansible",
+    "memberCount": 50000,
+    "stats_history": [
+      {"date": "2024-01-01", "memberCount": 49500},
+      {"date": "2024-01-08", "memberCount": 49650}
+    ]
+  },
+  "groups": [
+    {
+      "urlname": "Ansible-Minneapolis",
+      "id": "123456",
+      "name": "Minneapolis Ansible User Group",
+      "country": "US",
+      "city": "Minneapolis",
+      "memberCount": 1200
+    }
+  ]
 }
 ```
 
@@ -24,12 +37,10 @@ This project involves rewriting the existing R-based Meetup reporting and Discou
   "link": "https://www.meetup.com/ansible-minneapolis/events/311874047/",
   "status": "upcoming",
   "time": "2025-12-19T18:00:00Z",
-  "duration": "PT2H",
   "going": 25,
   "description": "...",
   "venue_name": "Online event",
   "is_online_event": true,
-  "country": "US",
   "discourse_topic_url": "https://forum.ansible.com/t/12345"
 }
 ```
@@ -39,10 +50,12 @@ This project involves rewriting the existing R-based Meetup reporting and Discou
 ### Meetup GraphQL API
 **Endpoint**: `https://api.meetup.com/gql`
 
-**Query: Fetch Pro Groups** (Directly from the Pro Network, removing need for `meetups.yml`)
+**Query: Fetch Pro Network Stats & Groups**
 ```graphql
 query ($urlname: String!) {
   proNetworkByUrlname(urlname: $urlname) {
+    name
+    memberCount
     groups(input: { first: 200 }) {
       edges {
         node {
@@ -51,6 +64,7 @@ query ($urlname: String!) {
           name
           city
           country
+          memberCount
         }
       }
     }
@@ -59,38 +73,23 @@ query ($urlname: String!) {
 ```
 
 **Query: Fetch Group Events**
+(Using the new GraphQL style to get exactly what we need)
 ```graphql
 query ($urlname: String!) {
   groupByUrlname(urlname: $urlname) {
-    upcomingEvents(input: { first: 20 }) {
+    unifiedEvents(input: { first: 50 }) {
       edges {
         node {
           id
           title
           eventUrl
           dateTime
-          duration
           going
           description
           venue {
             name
           }
-        }
-      }
-    }
-    pastEvents(input: { first: 20 }) {
-      edges {
-        node {
-          id
-          title
-          eventUrl
-          dateTime
-          duration
-          going
-          description
-          venue {
-            name
-          }
+          status
         }
       }
     }
@@ -100,72 +99,61 @@ query ($urlname: String!) {
 
 ### Discourse API
 - **Search**: `GET /search.json?q=#events tags:meetup status:open @MeetupBot`
-- **Get Topic**: `GET /t/{topic_id}.json`
-- **Create Post/Topic**: `POST /posts`
-- **Update Topic**: `PUT /t/{topic_id}.json`
-- **Update Post**: `PUT /posts/{post_id}.json`
+- **Update Topic/Post**: `PUT /t/{topic_id}.json` and `PUT /posts/{post_id}.json`
 
-## 3. Python Script Architecture
+## 3. Python Script Architecture (`meetup_bot.py`)
 
-A single script `meetup_bot.py` will handle all operations to simplify maintenance.
-
-- **CLI Interface**: Uses `argparse` to support:
+- **Configuration**: Single `credentials.yml` for Meetup OAuth, Discourse API, and SMTP.
+- **CLI Options**:
     - `--dry-run`: Prints Discourse changes without applying them.
-    - `--fetch`: Fetches data from Meetup.
-    - `--discourse`: Updates the forum.
-    - `--email`: Sends the report.
-- **Config Loader**: Loads `email.yml` for credentials and settings.
-- **Meetup Client**: Handles GraphQL queries and OAuth2.
-- **Discourse Client**: Handles forum interactions.
-- **Cache Manager**: Handles JSON-based local caching (`groups.json`, `events.json`).
-- **Report Generator**: Replicates R Markdown logic using Jinja2 and Matplotlib.
+    - `--fetch`: Updates local cache from Meetup API.
+    - `--discourse`: Syncs events to Discourse.
+    - `--report`: Generates and sends email reports.
+- **Caching**: Local JSON files in `/srv/docker-pins/meetup`.
+    - Weekly snapshots for Network member trends.
 
-## 4. Code Snippets
+## 4. Reporting & Visualization
 
-### Meetup GraphQL Client (Python)
-```python
-import requests
+### Multiple Report Types:
+1. **Executive Summary**: Total Network growth and high-level activity.
+2. **Activity Table**: Groups with current RSVPs and trends (Weekly, 30, 60, 90 days).
+3. **Upcoming Events**: Categorized list of future meetups.
 
-def fetch_meetup_data(query, variables, token):
-    url = "https://api.meetup.com/gql"
-    headers = {"Authorization": f"Bearer {token}"}
-    response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
-    return response.json()
-```
+### Visualization:
+- **Matplotlib/Seaborn**: Generate trend graphs for Network membership and event attendance.
+- **HTML/Jinja2**: Clean HTML tables with conditional formatting for trends.
 
-### Discourse Update with Dry-Run support
-```python
-def update_discourse_topic(url, auth, topic_id, title, category, dry_run=False):
-    if dry_run:
-        print(f"[DRY-RUN] Would update topic {topic_id} with title: {title}")
-        return
-
-    # Actual API call...
-    requests.put(f"{url}/t/{topic_id}.json", json={"title": title, "category": category}, headers=auth)
-```
-
-## 5. Caching Strategy
-- Use `groups.json` and `events.json` in the `/srv/docker-pins/meetup` directory.
-- `events.json` will store `discourse_topic_url` to link Meetup events to forum posts.
-
-## 6. Implementation Details
+## 5. Implementation Details
 
 ### Discourse Post Format
-Matches the required BBCode format:
 ```text
 [event url='{link}' start='{date}' status='public' ]
 [/event]
 {description}
 ```
 
-### Simplified Data Transformation
-- Directly request required fields via GraphQL to minimize post-processing.
-- Use `pandas` for any remaining trend analysis and report generation.
+### Credentials (`credentials.yml`)
+```yaml
+meetup:
+  client_id: "..."
+  client_secret: "..."
+  refresh_token: "..."
+discourse:
+  url: "https://forum.ansible.com"
+  api_key: "..."
+  api_user: "MeetupBot"
+  category: 1
+email:
+  smtp_server: "smtp.gmail.com"
+  username: "..."
+  password: "..."
+  targets: ["..."]
+```
 
-## 7. Execution Plan
+## 6. Execution Plan
 1. Initialize Python environment and `requirements.txt`.
-2. Implement `meetup_bot.py` with GraphQL and Discourse logic.
-3. Add `--dry-run` functionality.
-4. Port reporting logic and visualization to Python.
+2. Implement `meetup_bot.py` with GraphQL, Discourse, and Caching logic.
+3. Replicate trend analysis (Weekly, 30/60/90 day windows) using cached data.
+4. Implement reporting engine (HTML Tables + Graphs).
 5. Create new `Dockerfile`.
-6. Final verification and removal of R scripts.
+6. Cleanup R scripts and legacy config files.
