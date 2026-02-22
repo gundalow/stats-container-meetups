@@ -1,4 +1,4 @@
-## Docker Container for Meetup Reports (Python Rewrite)
+## Docker Container for Meetup Reports
 
 This container handles the gathering of Ansible Meetup data via the Meetup Pro GraphQL API, generating and sending email reports, and updating Discourse topics.
 
