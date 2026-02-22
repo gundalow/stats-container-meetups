@@ -7,7 +7,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 plt.switch_backend('Agg')
 from jinja2 import Template
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -49,6 +49,13 @@ class MeetupBot:
         url = "https://api.meetup.com/gql"
         headers = {"Authorization": f"Bearer {self.access_token}"}
         response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
+
+        if response.status_code == 401:
+            # Token might have expired, try once more
+            self.get_access_token()
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            response = requests.post(url, json={"query": query, "variables": variables}, headers=headers)
+
         response.raise_for_status()
         return response.json()
 
@@ -195,7 +202,7 @@ class MeetupBot:
             return
 
         # Filters from original script: active events in next 90 days
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         upcoming_cutoff = now + timedelta(days=90)
 
         upcoming_events = [
@@ -211,27 +218,40 @@ class MeetupBot:
         base_url = self.discourse_config.get('url')
         category = self.discourse_config.get('category')
 
-        # Get existing topics
-        search_str = f"#events tags:meetup status:open @{self.discourse_config.get('api_user')}"
-        search_url = f"{base_url}/search.json?expanded=true&q={requests.utils.quote(search_str)}"
-        resp = requests.get(search_url, headers=auth_headers)
-        resp.raise_for_status()
-        search_results = resp.json()
-
-        # Map meetup_id to discourse info
+        # Get existing topics with pagination
         existing_map = {}
-        for topic in search_results.get('topics', []):
-            # We need to get the first post to get external_id
-            topic_id = topic['id']
-            topic_resp = requests.get(f"{base_url}/t/{topic_id}.json", headers=auth_headers)
-            topic_data = topic_resp.json()
-            external_id = topic_data.get('external_id')
-            if external_id:
-                existing_map[external_id] = {
-                    'topic_id': topic_id,
-                    'post_id': topic_data['post_stream']['posts'][0]['id'],
-                    'title': topic['title']
-                }
+        page = 1
+        while True:
+            search_str = f"#events tags:meetup status:open @{self.discourse_config.get('api_user')}"
+            search_url = f"{base_url}/search.json?expanded=true&page={page}&q={requests.utils.quote(search_str)}"
+            resp = requests.get(search_url, headers=auth_headers)
+            resp.raise_for_status()
+            search_results = resp.json()
+
+            topics = search_results.get('topics', [])
+            if not topics:
+                break
+
+            for topic in topics:
+                # We need to get the first post to get external_id
+                topic_id = topic['id']
+                try:
+                    topic_resp = requests.get(f"{base_url}/t/{topic_id}.json", headers=auth_headers)
+                    topic_resp.raise_for_status()
+                    topic_data = topic_resp.json()
+                    external_id = topic_data.get('external_id')
+                    if external_id:
+                        existing_map[external_id] = {
+                            'topic_id': topic_id,
+                            'post_id': topic_data['post_stream']['posts'][0]['id'],
+                            'title': topic['title']
+                        }
+                except Exception as e:
+                    print(f"  Error fetching topic {topic_id}: {e}")
+
+            page += 1
+            if len(topics) < 50: # Assume 50 is page size
+                break
 
         for event in upcoming_events:
             title = f"{event['urlname']}: {event['title']} [{event['time'][:10]}]"
@@ -301,7 +321,7 @@ class MeetupBot:
 
         # 2. Activity Trends (RSVPs)
         # We need to calculate trends for 7, 30, 60, 90 days
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         events_df['time'] = pd.to_datetime(events_df['time'].str.replace('Z', '+00:00'))
 
         def get_rsvp_sum(days):

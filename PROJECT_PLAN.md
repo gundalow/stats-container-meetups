@@ -150,7 +150,21 @@ email:
   targets: ["..."]
 ```
 
-## 6. Execution Plan
+## 7. Verification & Testing
+
+### Unit Tests
+A test suite in `tests/test_meetup_bot.py` verifies:
+- **Authentication**: OAuth2 refresh token flow.
+- **Data Processing**: Correct calculation of 7, 30, 60, and 90-day RSVP trends.
+- **Timezone Safety**: Handling of UTC-aware vs naive datetimes to avoid comparison errors.
+- **Discourse Sync**: Logic for creating vs. updating topics and handling dry-run mode.
+- **Reporting**: Rendering of Jinja2 templates and integration with Matplotlib.
+
+### Assumptions Validated
+- **GraphQL Behavior**: `unifiedEvents` provides a sufficient window of events for both reporting and forum syncing.
+- **Environment**: Docker image includes all necessary system libraries for headless graph generation.
+
+## 8. Execution Plan
 1. Initialize Python environment and `requirements.txt`.
 2. Implement `meetup_bot.py` with GraphQL, Discourse, and Caching logic.
 3. Replicate trend analysis (Weekly, 30/60/90 day windows) using cached data.
